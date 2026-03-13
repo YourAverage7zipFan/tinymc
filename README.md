@@ -11,7 +11,7 @@ My usage of AI: LLMs are currently still tools, not at a place where they can wr
 I am a C noob, sorry if I traumatized someone with my terrible code.
 
 # Credits
-Textures are from Coterie Craft
-Block properties and item properties are collected from prismarine-data and prismarine-assets
-[Miniz](https://github.com/richgel999/miniz) for decompressing server packets
+Textures are from Coterie Craft\n
+Block properties and item properties are collected from prismarine-data and prismarine-assets\n
+[Miniz](https://github.com/richgel999/miniz) for decompressing server packets\n
 [Font6x8](https://github.com/fantasticmao/font6x8/tree/main) for F3 font
