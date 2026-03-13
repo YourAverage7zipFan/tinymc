@@ -15,7 +15,7 @@ I am a C noob, sorry if I traumatized someone with my terrible code.
 
 - 32MB RAM
 - Win95 or higher (?)
-- Basically any x86 CPU
+- Basically any x86 CPU (for prebuilt binary)
 
 Tested on Intel Pentium M. A consistent 30FPS can be achieved on default settings.
 
