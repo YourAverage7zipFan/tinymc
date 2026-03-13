@@ -4,6 +4,7 @@ TinyMC is a C implementation of a Minecraft 1.8 client, without using any graphi
 Currently it is really unstable and has a lack of features, making more of a proof of concept. But my plan is to get this to the point where bedwars is playable.
 
 Current version: a0.0.1
+
 Planned features: Block break/place, entities, crafting / chests / other inventory GUI stuff
 
 My usage of AI: LLMs are currently still tools, not at a place where they can write an entire app. In this project, I use AI to write helper functions that I can't be bothered to write myself. 
@@ -11,7 +12,10 @@ My usage of AI: LLMs are currently still tools, not at a place where they can wr
 I am a C noob, sorry if I traumatized someone with my terrible code.
 
 # Credits
-Textures are from Coterie Craft\n
-Block properties and item properties are collected from prismarine-data and prismarine-assets\n
-[Miniz](https://github.com/richgel999/miniz) for decompressing server packets\n
+Textures are from Coterie Craft
+
+Block properties and item properties are collected from prismarine-data and prismarine-assets
+
+[Miniz](https://github.com/richgel999/miniz) for decompressing server packets
+
 [Font6x8](https://github.com/fantasticmao/font6x8/tree/main) for F3 font
