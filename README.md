@@ -13,3 +13,5 @@ I am a C noob, sorry if I traumatized someone with my terrible code.
 # Credits
 Textures are from Coterie Craft
 Block properties and item properties are collected from prismarine-data and prismarine-assets
+[Miniz](https://github.com/richgel999/miniz) for decompressing server packets
+[Font6x8](https://github.com/fantasticmao/font6x8/tree/main) for F3 font
