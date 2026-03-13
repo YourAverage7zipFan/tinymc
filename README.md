@@ -11,6 +11,14 @@ My usage of AI: LLMs are currently still tools, not at a place where they can wr
 
 I am a C noob, sorry if I traumatized someone with my terrible code.
 
+# System requirements
+
+- 32MB RAM
+- Win95 or higher (?)
+- Basically any x86 CPU
+
+Tested on Intel Pentium M. A consistent 30FPS can be achieved on default settings.
+
 # Credits
 Textures are from Coterie Craft
 
