@@ -7,3 +7,5 @@ Current version: a0.0.1
 Planned features: Block break/place, entities, crafting / chests / other inventory GUI stuff
 
 My usage of AI: LLMs are currently still tools, not at a place where they can write an entire app. In this project, I use AI to write helper functions that I can't be bothered to write myself. 
+
+I am a C noob, sorry if I traumatized someone with my terrible code.
