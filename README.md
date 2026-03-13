@@ -9,3 +9,7 @@ Planned features: Block break/place, entities, crafting / chests / other invento
 My usage of AI: LLMs are currently still tools, not at a place where they can write an entire app. In this project, I use AI to write helper functions that I can't be bothered to write myself. 
 
 I am a C noob, sorry if I traumatized someone with my terrible code.
+
+# Credits
+Textures are from Coterie Craft
+Block properties and item properties are collected from prismarine-data and prismarine-assets
