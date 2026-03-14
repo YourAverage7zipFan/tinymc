@@ -27,3 +27,5 @@ Block properties and item properties are collected from prismarine-data and pris
 [Miniz](https://github.com/richgel999/miniz) for decompressing server packets
 
 [Font6x8](https://github.com/fantasticmao/font6x8/tree/main) for F3 font
+
+[Varint.C](https://github.com/tidwall/varint.c) for varint parser
