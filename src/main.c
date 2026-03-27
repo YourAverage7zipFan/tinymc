@@ -89,6 +89,11 @@
 #define INTERP_SHIFT 14
 #define INTERP_ONE (1 << INTERP_SHIFT)
 
+
+#define NBT_MAX_STRING_LEN 512
+
+#define MAX_TEMP_BLOCKS 16
+
 uint8_t renderer_distance = 24; // in blocks or chunks depending on mode
 int8_t dist_mode = 1; // 0 = chunk player is in, 1 = blocks around player within view dist, 2 = chunks around player within view dist
 int8_t dist_before_solid_color = 4; // in blocks from player
@@ -116,7 +121,6 @@ bool running = true;
 uint32_t pxbuf[RENDER_W * RENDER_H];
 float zbuffer[1]; // old z-buffer kept for ref and for compatability, but will have size 1. To define properly, use RENDER_W * RENDER_H
 int zbuffer_new[RENDER_W * RENDER_H]; // fixed point 16.16 for better performance
-
 
 
 int pixels_rendered;
@@ -340,6 +344,12 @@ int write_i8(unsigned char *buf, int8_t val) { // for readability
     return 1;
 }
 
+int write_i16(unsigned char *buf, int16_t val) {
+    buf[0] = (val >> 8) & 0xFF;
+    buf[1] = val & 0xFF;
+    return 2;
+}
+
 int write_i32(unsigned char *buf, int32_t val) {
     buf[0] = (val >> 24) & 0xFF;
     buf[1] = (val >> 16) & 0xFF;
@@ -541,12 +551,15 @@ typedef struct {
     uint16_t id;
     uint16_t meta_or_dmg;
     uint8_t count;
+    char nbt_data[NBT_MAX_STRING_LEN]; // ew nbt data :vomit: :vomit: :vomit:
+    int16_t nbt_len;
+    //unfortunately we must store it to make the fucking block placement work
+    //512 bcuz i don't want 6mb of ram taken (64kb normally)
 } SlotItem;
 
 typedef struct {
     // 9 for hotbar, 27 for inventory, 4 for armor, 5 for crafting
     SlotItem inv[45];
-    // ew no nbt data :vomit: :vomit: :vomit:
 } Inventory;
 
 typedef struct {
@@ -604,6 +617,9 @@ typedef struct {
     int chest_x, chest_y, chest_z;
 
     int cursor_on_block_x, cursor_on_block_y, cursor_on_block_z;
+    int8_t cursor_on_block_face;
+    int8_t cx_pos, cy_pos, cz_pos;
+    int8_t offset_x, offset_y, offset_z;
     bool is_cursor_on_block;
 
     InputEvent input_events[MAX_INPUT_EVENTS];
@@ -629,6 +645,17 @@ typedef struct {
 } Block;
 
 typedef struct {
+    int8_t ticks_before_revert;
+    int x, y, z;
+    int8_t active;
+    uint16_t id;
+    uint8_t meta;
+    uint16_t original_id;
+    uint8_t original_meta;
+    int cx, cz, csector; // for quick deletion when chunk unloads / updates a large section
+} TempBlock;
+
+typedef struct {
     Block blocks[256][16][16]; // [y][z][x]
 } ChunkBlocks;
 
@@ -650,6 +677,7 @@ typedef struct {
 
 BlockMeshQueueItem block_mesh_queue[BLOCK_MESH_QUEUE_SIZE];
 
+TempBlock temp_blocks[MAX_TEMP_BLOCKS];
 ///world helpers
 
 ChunkData* get_chunk(int x, int z) {
@@ -2787,6 +2815,16 @@ void block_mesh_queue_add_block(int x, int y, int z) {
     }
 }
 
+void remove_block_from_temp_blocks(int x, int y, int z) {
+    for(int i = 0; i < MAX_TEMP_BLOCKS; i++) {
+        TempBlock *tb = &temp_blocks[i];
+        if (tb->active && tb->x == x && tb->y == y && tb->z == z) {
+            tb->active = 0; // mark for revert in next physics
+            return;
+        }
+    }
+}
+
 int read_and_apply_multi_block_change_packet_info(const unsigned char *packet, int packet_len, int *pos) {
     int32_t chunk_x = read_i32(packet, pos);
     int32_t chunk_z = read_i32(packet, pos);
@@ -2807,6 +2845,7 @@ int read_and_apply_multi_block_change_packet_info(const unsigned char *packet, i
         int meta = bid_and_meta & 0xF;
         chunk->data.blocks[y][localZ][localX] = (Block){id, meta, 0};
         block_mesh_queue_add_block(chunk_x * 16 + localX, y, chunk_z * 16 + localZ);
+        remove_block_from_temp_blocks(chunk_x * 16 + localX, y, chunk_z * 16 + localZ);
     }
     return 1;
 }
@@ -2821,7 +2860,17 @@ int read_and_apply_single_block_change(const unsigned char *packet, int packet_l
     int meta = bid_and_meta & 0xF;
     set_block_xyz(x, y, z, id, meta);
     block_mesh_queue_add_block(x, y, z);
+    remove_block_from_temp_blocks(x, y, z);
     return 1;
+}
+
+void delete_all_temp_blocks_in_section(int chunk_x, int chunk_z, int section_y) {
+    for(int i = 0; i < MAX_TEMP_BLOCKS; i++) {
+        TempBlock *tb = &temp_blocks[i];
+        if (tb->active && tb->cx == chunk_x && tb->cz == chunk_z && tb->csector == section_y) {
+            tb->active = 0;
+        }
+    }
 }
 
 int read_and_apply_bulk_chunk_data_packet_info(const unsigned char *packet, int packet_len, int *pos) {
@@ -2898,6 +2947,7 @@ int read_and_apply_bulk_chunk_data_packet_info(const unsigned char *packet, int 
                         }
                     }
                 }
+                delete_all_temp_blocks_in_section(chunk->meta.x, chunk->meta.z, s);
                 *pos += 8192; 
             }
         }
@@ -3030,6 +3080,7 @@ int read_and_apply_map_chunk_packet_info(const unsigned char *packet, int packet
                     }
                 }
             }
+            delete_all_temp_blocks_in_section(chunk->meta.x, chunk->meta.z, s);
             *pos += 8192; 
         }
     }
@@ -3191,8 +3242,8 @@ int build_spawn_packet(unsigned char *final) { //final len should be 512 define 
     return final_pos;
 }
 
-int build_block_place_packet(unsigned char *final, int32_t x, int32_t y, int32_t z, uint8_t direction, int16_t hand, float cursor_x, float cursor_y, float cursor_z) { //final len should be 512 define like unsigned char final[512];
-    //save nbt raw bin for this shit
+int build_block_place_packet(unsigned char *final, int32_t x, int32_t y, int32_t z, uint8_t direction, int8_t cursor_x, int8_t cursor_y, int8_t cursor_z, int16_t item_id, uint8_t item_count, int16_t item_damage, char *nbt_data, int16_t nbt_len) { //final len should be 512 define like unsigned char final[512];
+    //save nbt raw bin for this well well well i am back and i did it hahah XDXDXD
     //slot=id,count,dmg,nbt|i16,i8,i16
     unsigned char buf[512];
     int pos = 0;
@@ -3202,10 +3253,22 @@ int build_block_place_packet(unsigned char *final, int32_t x, int32_t y, int32_t
     pos += varint_write_u64(buf + pos, 0x08); // 0x08 is ID of packet for block place
     write_position(buf, &pos, x, y, z);
     pos += write_u8(buf + pos, direction);
-    pos += write_i16(buf + pos, hand);
-    pos += write_f32(buf + pos, cursor_x);
-    pos += write_f32(buf + pos, cursor_y);
-    pos += write_f32(buf + pos, cursor_z);
+    pos += write_i16(buf + pos, item_id);
+    if (item_id != -1) {
+        pos += write_u8(buf + pos, item_count);
+        pos += write_i16(buf + pos, item_damage);
+        if (nbt_len > 0 && nbt_data != NULL) {
+            // nbt_data should already contain the 0x0A start byte
+            memcpy(buf + pos, nbt_data, nbt_len);
+            pos += nbt_len;
+        } else {
+            pos += write_u8(buf + pos, 0x00);
+        }
+    }
+    pos += write_i8(buf + pos, cursor_x);
+    pos += write_i8(buf + pos, cursor_y);
+    pos += write_i8(buf + pos, cursor_z);
+
 
     // write length cuz server stupid
     int final_pos = 0;
@@ -3258,21 +3321,35 @@ int read_and_apply_set_slot_packet(const unsigned char *packet, int packet_len, 
             me.inventory.inv[slot].id = 0;
             me.inventory.inv[slot].meta_or_dmg = 0;
             me.inventory.inv[slot].count = 0;
+            memset(me.inventory.inv[slot].nbt_data, 0, NBT_MAX_STRING_LEN); // clear nbt data
+            me.inventory.inv[slot].nbt_len = 0;
             //printf("Inventory Slot %d: Empty\n", slot);
         }
     } else {
         int8_t item_count = read_i8(packet, pos);
         int16_t damage_or_meta = read_i16(packet, pos);
+        int nbt_start_pos = *pos;
         int8_t nbt_start_byte = read_i8(packet, pos);
+
+        int8_t nbt_data[512];
         
         if (nbt_start_byte == 0x00) {
         } else {
             skip_nbt(nbt_start_byte, packet, pos); 
+            int cpylen = *pos - nbt_start_pos;
+            if (cpylen > NBT_MAX_STRING_LEN) {
+                printf("NBT data too long, truncating to %d bytes\n", NBT_MAX_STRING_LEN);
+                cpylen = NBT_MAX_STRING_LEN;
+            }
+            memset(nbt_data, 0, NBT_MAX_STRING_LEN); // clear nbt data buffer
+            memcpy(nbt_data, packet + nbt_start_pos, cpylen); // save nbt data
         }
         if (window_id == 0) {
             me.inventory.inv[slot].id = id;
             me.inventory.inv[slot].meta_or_dmg = damage_or_meta;
             me.inventory.inv[slot].count = item_count;
+            memcpy(me.inventory.inv[slot].nbt_data, nbt_data, NBT_MAX_STRING_LEN); // save nbt data to inventory slot
+            me.inventory.inv[slot].nbt_len = (uint16_t)(*pos - nbt_start_pos);
             printf("Inventory Slot %d: ID=%d, Count=%d, Meta/Dmg=%d\n", slot, id, item_count, damage_or_meta);
         }
     }
@@ -3290,16 +3367,28 @@ int read_and_apply_window_items_packet(const unsigned char *packet, int packet_l
                 me.inventory.inv[i].id = 0;
                 me.inventory.inv[i].meta_or_dmg = 0;
                 me.inventory.inv[i].count = 0;
+                memset(me.inventory.inv[i].nbt_data, 0, NBT_MAX_STRING_LEN); // clear nbt data
+                me.inventory.inv[i].nbt_len = 0;
                 //printf("Inventory Slot %d: Empty\n", i);
             }
         } else {
             int8_t item_count = read_i8(packet, pos);
             int16_t damage_or_meta = read_i16(packet, pos);
+            int nbt_start_pos = *pos;
             int8_t nbt_start_byte = read_i8(packet, pos);
+
+            int8_t nbt_data[512];
             
             if (nbt_start_byte == 0x00) {
             } else {
                 skip_nbt(nbt_start_byte, packet, pos); 
+                int cpylen = *pos - nbt_start_pos;
+                if (cpylen > NBT_MAX_STRING_LEN) {
+                    printf("NBT data too long, truncating to %d bytes\n", NBT_MAX_STRING_LEN);
+                    cpylen = NBT_MAX_STRING_LEN;
+                }
+                memset(nbt_data, 0, NBT_MAX_STRING_LEN); // clear nbt data buffer
+                memcpy(nbt_data, packet + nbt_start_pos, cpylen); // save nbt data
             }
             if (window_id == 0) {
                 // inventnory
@@ -3310,6 +3399,8 @@ int read_and_apply_window_items_packet(const unsigned char *packet, int packet_l
                 me.inventory.inv[i].id = id;
                 me.inventory.inv[i].meta_or_dmg = damage_or_meta;
                 me.inventory.inv[i].count = item_count;
+                memcpy(me.inventory.inv[i].nbt_data, nbt_data, NBT_MAX_STRING_LEN); // save nbt data to inventory slot
+                me.inventory.inv[i].nbt_len = (uint16_t)(*pos - nbt_start_pos);
                 printf("Inventory Slot %d: ID=%d, Count=%d, Meta/Dmg=%d\n", i, id, item_count, damage_or_meta);
             }
         }
@@ -4036,6 +4127,56 @@ int render_frame(uint32_t *pxbuf, int width, int height) {
         // Left Face: 4, 6, 2, 0 (CW)
         draw_quad_z_wire(sx[4], sy[4], depth[4], sx[6], sy[6], depth[6], sx[2], sy[2], depth[2], sx[0], sy[0], depth[0], highlight_color);
     }
+
+    
+    highlight_color = 0x8f00df;
+    //inflate bound by 0.01 to prevent z-fighting
+    block_x = (float)me.cursor_on_block_x+ me.offset_x;
+    block_y = (float)me.cursor_on_block_y+me.offset_y;
+    block_z = (float)me.cursor_on_block_z + me.offset_z;
+    float vertices2[8][3] = {
+        {block_x - 0.01f, block_y - 0.01f, block_z - 0.01f},
+        {block_x + 1.01f, block_y - 0.01f, block_z - 0.01f},
+        {block_x - 0.01f, block_y + 1.01f, block_z - 0.01f},
+        {block_x + 1.01f, block_y + 1.01f, block_z - 0.01f},
+        {block_x - 0.01f, block_y - 0.01f, block_z + 1.01f},
+        {block_x + 1.01f, block_y - 0.01f, block_z + 1.01f},
+        {block_x - 0.01f, block_y + 1.01f, block_z + 1.01f},
+        {block_x + 1.01f, block_y + 1.01f, block_z + 1.01f}
+    };
+    for(int i = 0; i < 8; i++){
+        if (get_coords_from_3d(&sx[i], &sy[i], &depth[i], vertices2[i][0], vertices2[i][1], vertices2[i][2], vp) > 0) {
+            skip[i] = 0;
+        } else {
+            skip[i] = 1;
+        }
+    }
+    if (!skip[0] && !skip[1] && !skip[2] && !skip[3]) {
+        // Front Face: 0, 2, 3, 1 (CW)
+        draw_quad_z_wire(sx[0], sy[0], depth[0], sx[2], sy[2], depth[2], sx[3], sy[3], depth[3], sx[1], sy[1], depth[1], highlight_color); 
+    }
+    // Back Face: 5, 7, 6, 4 (CW)
+    if (!skip[5] && !skip[7] && !skip[6] && !skip[4]) {
+        draw_quad_z_wire(sx[5], sy[5], depth[5], sx[7], sy[7], depth[7], sx[6], sy[6], depth[6], sx[4], sy[4], depth[4], highlight_color); 
+    }
+    if (!skip[2] && !skip[6] && !skip[7] && !skip[3]) {
+        // Top Face: 2, 6, 7, 3 (CW)
+        draw_quad_z_wire(sx[2], sy[2], depth[2], sx[6], sy[6], depth[6], sx[7], sy[7], depth[7], sx[3], sy[3], depth[3], highlight_color);
+    }
+    if (!skip[0] && !skip[1] && !skip[5] && !skip[4]) {
+        // Bottom Face: 0, 1, 5, 4 (CW)
+        draw_quad_z_wire(sx[0], sy[0], depth[0], sx[1], sy[1], depth[1], sx[5], sy[5], depth[5], sx[4], sy[4], depth[4], highlight_color); 
+    }
+    if (!skip[1] && !skip[3] && !skip[7] && !skip[5]) {
+        // Right Face: 1, 3, 7, 5 (Already CW)
+        draw_quad_z_wire(sx[1], sy[1], depth[1], sx[3], sy[3], depth[3], sx[7], sy[7], depth[7], sx[5], sy[5], depth[5], highlight_color); 
+    }
+    if (!skip[4] && !skip[6] && !skip[2] && !skip[0]) {
+        // Left Face: 4, 6, 2, 0 (CW)
+        draw_quad_z_wire(sx[4], sy[4], depth[4], sx[6], sy[6], depth[6], sx[2], sy[2], depth[2], sx[0], sy[0], depth[0], highlight_color);
+    }
+
+    
                                     
 
     //gettimeofday(&stop, NULL);
@@ -4401,6 +4542,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam){
 typedef struct {
     float x, y, z;
 } Vec3;
+/*
+typedef struct {
+    bool intersects;
+    int8_t dir; // 0-5 for the face that was intersected, -1 if not intersecting
+    int8_t c_x, c_y, c_z; 
+    int8_t placeoffset_x, placeoffset_y, placeoffset_z; 
+} IntersectWithDirAndCPos;*/
 
 typedef struct {
     bool intersects;
@@ -4417,6 +4565,36 @@ bool boxes_intersect(AABB a, AABB b) {
            (a.min[1] < b.max[1] && a.max[1] > b.min[1]) &&
            (a.min[2] < b.max[2] && a.max[2] > b.min[2]);
 }
+
+/*
+IntersectWithDirAndCPos boxes_intersect_advanced(AABB a, AABB b) { 
+    IntersectWithDirAndCPos result = {false, -1, 0, 0, 0, 0, 0, 0};
+    
+    if (boxes_intersect(a, b)) {
+        result.intersects = true;
+        
+        float x_overlap = fminf(a.max[0], b.max[0]) - fmaxf(a.min[0], b.min[0]);
+        float y_overlap = fminf(a.max[1], b.max[1]) - fmaxf(a.min[1], b.min[1]);
+        float z_overlap = fminf(a.max[2], b.max[2]) - fmaxf(a.min[2], b.min[2]);
+        if (x_overlap < y_overlap && x_overlap < z_overlap) {
+            result.dir = (b.min[0] < a.min[0]) ? 4 : 5; 
+            result.placeoffset_x = (b.min[0] < a.min[0]) ? -1 : 1;
+        } else if (y_overlap < x_overlap && y_overlap < z_overlap) {
+            result.dir = (b.min[1] < a.min[1]) ? 0 : 1;
+            result.placeoffset_y = (b.min[1] < a.min[1]) ? -1 : 1;
+        } else {
+            result.dir = (b.min[2] < a.min[2]) ? 2 : 3;
+            result.placeoffset_z = (b.min[2] < a.min[2]) ? -1 : 1;
+        }
+        float click_x = clamp((b.min[0] + b.max[0]) / 2.0f, a.min[0], a.max[0]);
+        float click_y = clamp((b.min[1] + b.max[1]) / 2.0f, a.min[1], a.max[1]);
+        float click_z = clamp((b.min[2] + b.max[2]) / 2.0f, a.min[2], a.max[2]);
+        result.c_x = (int8_t)((click_x - a.min[0]) * 16.0f);
+        result.c_y = (int8_t)((click_y - a.min[1]) * 16.0f);
+        result.c_z = (int8_t)((click_z - a.min[2]) * 16.0f);
+    }
+    return result;
+}*/
 
 bool is_on_top(AABB a, AABB b, float epsilon) {
     bool y_touching = fabsf(a.min[1] - b.max[1]) < epsilon;
@@ -4458,6 +4636,35 @@ CollisionResult check_collision(CollisionShape shape1, Vec3 pos1, bool offset1by
     }
     return result;
 }
+
+/*
+CollisionResult check_collision_advanced(CollisionShape shape1, Vec3 pos1, bool offset1bypt5, CollisionShape shape2, Vec3 pos2, bool offset2bypt5, IntersectWithDirAndCPos* out_intersection) {
+    CollisionResult result = {false, false};
+    const float EPSILON = 0.015f; // Tolerance
+    for (int i = 0; i < shape1.num_boxes; i++) {
+        AABB box1 = translate_box(&shape1.boxes[i], pos1);
+        if (offset1bypt5) {
+            box1 = translate_box(&box1, (Vec3){-0.5f, 0.0f, -0.5f});
+        }
+        for (int j = 0; j < shape2.num_boxes; j++) {
+            AABB box2 = translate_box(&shape2.boxes[j], pos2);
+            if (offset2bypt5) {
+                box2 = translate_box(&box2, (Vec3){-0.5f, 0.0f, -0.5f});
+            }
+            IntersectWithDirAndCPos intersection = boxes_intersect_advanced(box2, box1);
+            if (intersection.intersects) {
+                result.intersects = true;
+                if (out_intersection) {
+                    *out_intersection = intersection;
+                }
+            }
+            if (is_on_top(box1, box2, EPSILON)) {
+                result.is_directly_on_top = true;
+            }
+        }
+    }
+    return result;
+}*/
 
 CollisionShape player_standing = {
     .num_boxes = 1,
@@ -4676,49 +4883,94 @@ void mesh_queue(){
     }
 }
 
-void update_cursor_on_block(){
-    // raycast from player position in direction of camera until it hits a block or reaches max distance
-    float max_distance = 4.5f; // for breaking/placing, not pvp
-    Vector3 forward = pitch_yaw_to_forward_degrees(me.base.base.pitch, me.base.base.yaw); //test without me.base.base.pitch for now
-    Vector3 ray_pos = {me.base.base.x,me.base.base.y + get_player_camera_yoff(), me.base.base.z}; // eye position
-    for (float t = 0; t < max_distance; t += 0.005f) {
-        Vector3 check_pos = {ray_pos.x + forward.x * t, ray_pos.y + forward.y * t, ray_pos.z + forward.z * t};
-        Block* block = get_block_xyz((int)floorf(check_pos.x), (int)floorf(check_pos.y), (int)floorf(check_pos.z));
-        //check if cursor touches block hitbox 
-        
+void update_cursor_on_block() {
+    float max_distance = 4.5f;
+    Vector3 forward = pitch_yaw_to_forward_degrees(me.base.base.pitch, me.base.base.yaw);
+    float ox = me.base.base.x;
+    float oy = me.base.base.y + get_player_camera_yoff();
+    float oz = me.base.base.z;
+    int ix = (int)floorf(ox);
+    int iy = (int)floorf(oy);
+    int iz = (int)floorf(oz);
+    float dx = forward.x;
+    float dy = forward.y;
+    float dz = forward.z;
+    int step_x = (dx >= 0) ? 1 : -1;
+    int step_y = (dy >= 0) ? 1 : -1;
+    int step_z = (dz >= 0) ? 1 : -1;
+    float t_delta_x = (fabsf(dx) < 1e-9f) ? 1e30f : fabsf(1.0f / dx);
+    float t_delta_y = (fabsf(dy) < 1e-9f) ? 1e30f : fabsf(1.0f / dy);
+    float t_delta_z = (fabsf(dz) < 1e-9f) ? 1e30f : fabsf(1.0f / dz);
+    float t_max_x = (dx >= 0) ? ((ix + 1) - ox) * t_delta_x : (ox - ix) * t_delta_x;
+    float t_max_y = (dy >= 0) ? ((iy + 1) - oy) * t_delta_y : (oy - iy) * t_delta_y;
+    float t_max_z = (dz >= 0) ? ((iz + 1) - oz) * t_delta_z : (oz - iz) * t_delta_z;
+    int face = -1;
+    while (1) {
+        if (t_max_x < t_max_y && t_max_x < t_max_z) {
+            if (t_max_x > max_distance) break;
+            ix += step_x;
+            face = (step_x > 0) ? 4 : 5; // these are probably scuffed, idk **PLEASE COME BACK TO THIS**
+            t_max_x += t_delta_x;
+        } else if (t_max_y < t_max_z) {
+            if (t_max_y > max_distance) break;
+            iy += step_y;
+            face = (step_y > 0) ? 1 : 0;
+            t_max_y += t_delta_y;
+        } else {
+            if (t_max_z > max_distance) break;
+            iz += step_z;
+            face = (step_z > 0) ? 2 : 3;
+            t_max_z += t_delta_z;
+        }
+
+        Block* block = get_block_xyz(ix, iy, iz);
         if (block && block->id != 0) {
-            /*
-            me.cursor_on_block_x = round(check_pos.x);
-            me.cursor_on_block_y = round(check_pos.y);
-            me.cursor_on_block_z = round(check_pos.z);
+            me.cursor_on_block_x = ix;
+            me.cursor_on_block_y = iy;
+            me.cursor_on_block_z = iz;
             me.is_cursor_on_block = true;
-            return;*/
-            //use 0.001x0.001x0.001 box at check_pos to check collision with block hitbox, if collides then set cursor on block
-            CollisionShape test_shape_0_001 = {
-                .num_boxes = 1,
-                .boxes = {
-                    {{-0.0005f, -0.0005f, -0.0005f}, {0.0005f, 0.0005f, 0.0005f}},
-                }
-            };
-            CollisionResult res = check_collision(test_shape_0_001, (Vec3){check_pos.x, check_pos.y, check_pos.z}, false, get_bounding_box_shape(block->id, block->meta), (Vec3){floorf(check_pos.x), floorf(check_pos.y), floorf(check_pos.z)}, false);
-            
-            if (res.intersects) {
-                me.cursor_on_block_x = (int)floorf(check_pos.x);
-                me.cursor_on_block_y = (int)floorf(check_pos.y);
-                me.cursor_on_block_z = (int)floorf(check_pos.z);
-                me.is_cursor_on_block = true;
-                return;
-            }
+            me.cursor_on_block_face = face;
+            me.offset_x = (face == 4) ? -1 : (face == 5) ?  1 : 0;
+            me.offset_y = (face == 0) ? 1 : (face == 1) ? -1 : 0;
+            me.offset_z = (face == 2) ? -1 : (face == 3) ? 1 : 0;
+            return;
         }
     }
+
     me.cursor_on_block_x = -1;
     me.cursor_on_block_y = -1;
     me.cursor_on_block_z = -1;
     me.is_cursor_on_block = false;
+    me.cursor_on_block_face = -1;
+    me.offset_x = 0;
+    me.offset_y = 0;
+    me.offset_z = 0;
 }
 
+void add_block_to_temp_blocks(int x, int y, int z, Block prev_block) {
+    for (int i = 0; i < MAX_TEMP_BLOCKS; i++) {
+        if (!temp_blocks[i].active) {
+            temp_blocks[i].active = 1;
+            temp_blocks[i].x = x;
+            temp_blocks[i].y = y;
+            temp_blocks[i].z = z;
+            Block* block = get_block_xyz(x, y, z);
+            temp_blocks[i].id = block ? block->id : 0;
+            temp_blocks[i].meta = block ? block->meta : 0;
+            temp_blocks[i].ticks_before_revert = 10;
+            temp_blocks[i].cx = x >> 4;
+            temp_blocks[i].cz = z >> 4;
+            temp_blocks[i].csector = y >> 4;
+            temp_blocks[i].original_id = prev_block.id;
+            temp_blocks[i].original_meta = prev_block.meta;
+
+            break;
+        }
+    }
+}
 
 void physics_tick(int tick_count){
+    (void)tick_count; 
     me.w_key_down = GetAsyncKeyState('W') & 0x8000;
     me.a_key_down = GetAsyncKeyState('A') & 0x8000;
     me.s_key_down = GetAsyncKeyState('S') & 0x8000;
@@ -4743,7 +4995,6 @@ void physics_tick(int tick_count){
     if (me.ctrl_key_down) {
         fpm *= me.sprint_multiplier;
     }
-
     if (me.w_key_down){
         Vector3 forward = pitch_yaw_to_forward_degrees_no_y(0, me.base.base.yaw);
         me.x_vel += forward.x * me.base_move_speed*fpm;
@@ -4764,6 +5015,7 @@ void physics_tick(int tick_count){
         me.x_vel -= forward.z * me.base_move_speed*spm;
         me.z_vel += forward.x * me.base_move_speed*spm;
     }
+
 
     me.x_vel *= me.friction_multiplier;
     me.z_vel *= me.friction_multiplier;
@@ -4803,28 +5055,75 @@ void physics_tick(int tick_count){
     me.y_vel += me.gravity;
 
     if (1){
+        if (me.shift_key_down && me.on_ground) {
+            double original_x = me.base.base.x;
+            me.base.base.x += me.x_vel;
+            
+            if (!check_client_player_block_collision(me, current_shape).is_directly_on_top) {
+                me.base.base.x = original_x; 
+                while (fabs(me.x_vel) > 0.01) {
+                    me.base.base.x += (me.x_vel > 0 ? 0.01 : -0.01);
+                    if (!check_client_player_block_collision(me, current_shape).is_directly_on_top) {
+                        me.base.base.x -= (me.x_vel > 0 ? 0.01 : -0.01);
+                        me.x_vel = 0;
+                        break;
+                    }
+                }
+            } else {
+                me.base.base.x = original_x;
+            }
+        }
         me.base.base.x += me.x_vel;
-        // if stuck in block, move back until not colliding
+        double x_vel_used = 0;
         if (check_client_player_block_collision(me, current_shape).intersects) {
             for (int i = 0; i < ceil(fabs(me.x_vel) * 100); i += 1) {
                 me.base.base.x -= (me.x_vel > 0 ? 0.01f : -0.01f);
-                if (!check_client_player_block_collision(me, current_shape).intersects) {
+                x_vel_used += (me.x_vel > 0 ? 0.01f : -0.01f);
+                CollisionResult res = check_client_player_block_collision(me, current_shape);
+                if (!res.intersects) {
                     break;
                 }
             }
             me.x_vel = 0;
         }
+        if (me.shift_key_down && me.on_ground) {
+            double original_z = me.base.base.z;
+            me.base.base.z += me.z_vel;
+            
+            if (!check_client_player_block_collision(me, current_shape).is_directly_on_top) {
+                me.base.base.z = original_z; 
+                while (fabs(me.z_vel) > 0.01) {
+                    me.base.base.z += (me.z_vel > 0 ? 0.01 : -0.01);
+                    if (!check_client_player_block_collision(me, current_shape).is_directly_on_top) {
+                        me.base.base.z -= (me.z_vel > 0 ? 0.01 : -0.01);
+                        me.z_vel = 0;
+                        break;
+                    }
+                }
+            } else {
+                me.base.base.z = original_z; // Just a check, don't move yet
+            }
+        }
+        
         me.base.base.z += me.z_vel;
+        double z_vel_used = 0;
         // if stuck in block, move back until not colliding
         if (check_client_player_block_collision(me, current_shape).intersects) {
             for (int i = 0; i < ceil(fabs(me.z_vel) * 100); i += 1) {
                 me.base.base.z -= (me.z_vel > 0 ? 0.01f : -0.01f);
-                if (!check_client_player_block_collision(me, current_shape).intersects) {
-                    break;
+                z_vel_used += (me.z_vel > 0 ? 0.01f : -0.01f);
+                CollisionResult res = check_client_player_block_collision(me, current_shape);
+                if (!res.intersects) {
+                    if (0) {
+                    } else {
+                        break;
+                    }
                 }
             }
             me.z_vel = 0;
         }
+
+
         me.base.base.y += me.y_vel;
         // if stuck in block, move back until not colliding
         if (check_client_player_block_collision(me, current_shape).intersects) {
@@ -4847,6 +5146,7 @@ void physics_tick(int tick_count){
 
     for (int i = 0; i < MAX_INPUT_EVENTS; i++) {
         if (me.input_events[i].type != 0) {
+            printf("event %d: type=%d code=%d action=%d\n", i, me.input_events[i].type, me.input_events[i].code, me.input_events[i].action);
             if (me.input_events[i].type == 1) {
                 //keyboard event
             } else if (me.input_events[i].type == 2) {
@@ -4855,13 +5155,49 @@ void physics_tick(int tick_count){
                     //left button
                 } else {
                     //right button
-                    if (me.input_events[i].action == 0) {
+                    if ((me.input_events[i].action == 0) && (me.inventory.inv[me.selected_slot + 36].id <= 255) && me.is_cursor_on_block) { // +36 = hotbar
+                        // do block place
+                        // lets just immediately send the packet instead of waiting for the next tick, because i'm an absloute sucker that can't be bothered to implement a packet queue
+                        CollisionShape current_shape = me.shift_key_down ? player_crouching : player_standing;
+                        // check if it can be placed
+                        Block prev_block = *get_block_xyz(me.cursor_on_block_x + me.offset_x, me.cursor_on_block_y + me.offset_y, me.cursor_on_block_z + me.offset_z);
+                        printf("se;ected slot: %d, id: %d, meta: %d\n", me.selected_slot, me.inventory.inv[me.selected_slot + 36].id, me.inventory.inv[me.selected_slot + 36].meta_or_dmg);
+                        printf("Trying to place block id %d meta %d at (%d, %d, %d) (prev id %d meta %d)\n", me.inventory.inv[me.selected_slot + 36].id, me.inventory.inv[me.selected_slot + 36].meta_or_dmg, me.cursor_on_block_x + me.offset_x, me.cursor_on_block_y + me.offset_y, me.cursor_on_block_z + me.offset_z, prev_block.id, prev_block.meta);
+                        set_block_xyz(me.cursor_on_block_x + me.offset_x, me.cursor_on_block_y + me.offset_y, me.cursor_on_block_z + me.offset_z, me.inventory.inv[me.selected_slot + 36].id, me.inventory.inv[me.selected_slot + 36].meta_or_dmg);
+                        if (check_client_player_block_collision(me, current_shape).intersects) {
+                            // undo block place
+                            set_block_xyz(me.cursor_on_block_x + me.offset_x, me.cursor_on_block_y + me.offset_y, me.cursor_on_block_z + me.offset_z, prev_block.id, prev_block.meta);
+                            //printf("Can't place block, player collision\n");
+                            me.input_events[i].type = 0; // mark event as processed
+                            continue;
+                        } else {
+                            add_block_to_temp_blocks(me.cursor_on_block_x + me.offset_x, me.cursor_on_block_y + me.offset_y, me.cursor_on_block_z + me.offset_z, prev_block); // add block to temp blocks to revert after 10 ticks
+                            block_mesh_queue_add_block(me.cursor_on_block_x + me.offset_x, me.cursor_on_block_y + me.offset_y, me.cursor_on_block_z + me.offset_z);
+                            
+                            int final_len = build_block_place_packet(send_pk_periodic, me.cursor_on_block_x + me.offset_x, me.cursor_on_block_y + me.offset_y, me.cursor_on_block_z + me.offset_z, me.cursor_on_block_face, me.cx_pos, me.cy_pos, me.cz_pos, me.inventory.inv[me.selected_slot + 36].id, me.inventory.inv[me.selected_slot + 36].count, me.inventory.inv[me.selected_slot + 36].meta_or_dmg, me.inventory.inv[me.selected_slot + 36].nbt_data, me.inventory.inv[me.selected_slot + 36].nbt_len);
+                            //printf("Built block place packet with length %d\n", final_len);
+                            send(server, (char*)send_pk_periodic, final_len, 0);
+                        }
                     }
                 }
             }
+            me.input_events[i].type = 0; // mark event as processed
         }
     }
     
+
+    //temp block handling
+    for (int i = 0; i < MAX_TEMP_BLOCKS; i++) {
+        if (temp_blocks[i].active) {
+            temp_blocks[i].ticks_before_revert -= 1;
+            if (temp_blocks[i].ticks_before_revert <= 0) {
+                printf("Reverting block at (%d, %d, %d) to id %d meta %d\n", temp_blocks[i].x, temp_blocks[i].y, temp_blocks[i].z, temp_blocks[i].original_id, temp_blocks[i].original_meta);
+                set_block_xyz(temp_blocks[i].x, temp_blocks[i].y, temp_blocks[i].z, temp_blocks[i].original_id, temp_blocks[i].original_meta);
+                block_mesh_queue_add_block(temp_blocks[i].x, temp_blocks[i].y, temp_blocks[i].z);
+                temp_blocks[i].active = false;
+            }
+        }
+    }
 }
 
 void interpolation_physics(uint64_t last_tick_us, uint64_t next_tick_us) {
