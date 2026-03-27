@@ -3,7 +3,7 @@ TinyMC is a C implementation of a Minecraft 1.8 client, without using any graphi
 
 Currently it is really unstable and has a lack of features, making more of a proof of concept. But my plan is to get this to the point where bedwars is playable.
 
-Current version: a0.0.1
+Current version: a0.0.2
 
 Planned features: Block break/place, entities, crafting / chests / other inventory GUI stuff
 
@@ -29,3 +29,7 @@ Block properties and item properties are collected from prismarine-data and pris
 [Font6x8](https://github.com/fantasticmao/font6x8/tree/main) for F3 font
 
 [Varint.C](https://github.com/tidwall/varint.c) for varint parser
+
+# Updates
+
+- a0.0.2 introduced block placing!! Build it yourself you lazy bum im not uploading a prebuild binary
