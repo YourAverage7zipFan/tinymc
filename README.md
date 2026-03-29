@@ -32,4 +32,4 @@ Block properties and item properties are collected from prismarine-data and pris
 
 # Updates
 
-- a0.0.2 introduced block placing!! Build it yourself you lazy bum im not uploading a prebuild binary
+- a0.0.2 introduced block placing
