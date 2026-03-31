@@ -102,7 +102,7 @@ int8_t renderer_res_mul = 17; // triangles closer will have lower resolution. re
 
 int8_t gui_size_mp = 2;
 
-bool renderer_res_mul_dynamic = false; // if true then the above will apply. don't use this shit it makes it slower
+bool renderer_res_mul_dynamic = false; // if true then the above will apply. don't use this it makes it slower
 
 unsigned char recv_buf[RECV_BUF_SIZE];
 unsigned char send_pk[SMALL_BUF_SIZE];
@@ -553,7 +553,7 @@ typedef struct {
     uint8_t count;
     char nbt_data[NBT_MAX_STRING_LEN]; // ew nbt data :vomit: :vomit: :vomit:
     int16_t nbt_len;
-    //unfortunately we must store it to make the fucking block placement work
+    //unfortunately we must store it to make the block placement work
     //512 bcuz i don't want 6mb of ram taken (64kb normally)
 } SlotItem;
 
@@ -3279,7 +3279,7 @@ int build_block_place_packet(unsigned char *final, int32_t x, int32_t y, int32_t
 }
 
 void skip_nbt(uint8_t type, const unsigned char *packet, int *pos) {
-    // bullshit remover
+    // bs remover
     if (type == 0) return;
     switch (type) {
         case 1: read_u8(packet, pos); break;
@@ -4234,7 +4234,7 @@ Vector3 pitch_yaw_to_forward_no_y(float pitch, float yaw) {
 Vector3 pitch_yaw_to_forward_degrees_no_y(float pitch_deg, float yaw_deg) {
     float pitch = pitch_deg * M_PI / 180.0f;
     float yaw = yaw_deg * M_PI / 180.0f;
-    return pitch_yaw_to_forward_no_y(pitch, yaw * -1); // Invert yaw for no fucking reason it just works better
+    return pitch_yaw_to_forward_no_y(pitch, yaw * -1); // Invert yaw for no reason it just works better
 }
 
 
