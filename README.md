@@ -1,3 +1,5 @@
+# **DEMO BINARY DOESN'T WORK RIGHT NOW!! THE DEMO SERVER IS DOWN**
+
 # TinyMC
 TinyMC is a C implementation of a Minecraft 1.8 client, without using any graphics libraries. It is designed to run on any system, even without a GPU. All the rendering is CPU accelerated. 
 
